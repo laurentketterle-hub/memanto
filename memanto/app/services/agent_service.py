@@ -180,12 +180,21 @@ class AgentService:
         self._save_agent(agent)
         return agent
 
-    def delete_agent(self, agent_id: str) -> None:
+    def delete_agent(self, agent_id: str, delete_namespace: bool = False) -> None:
         """
-        Delete agent
+        Delete agent and all associated artifacts.
+
+        Cleans up:
+        - Agent metadata file (~/.memanto/agents/{agent_id}.json)
+        - Session files (~/.memanto/sessions/{agent_id}.json and
+          ~/.memanto/sessions/{agent_id}_* summary/state files)
+        - Conflict report files (~/.memanto/conflicts/{agent_id}_*)
+        - Active session marker if this agent was active
 
         Args:
             agent_id: Agent identifier
+            delete_namespace: If True, also delete the Moorcheh namespace
+                (best-effort; failures are silently ignored).
 
         Raises:
             AgentNotFoundError: If agent doesn't exist
@@ -194,7 +203,57 @@ class AgentService:
         if not agent_file.exists():
             raise AgentNotFoundError(f"Agent '{agent_id}' not found")
 
+        # 1. Delete the agent metadata file
         agent_file.unlink()
+
+        # 2. Clean up session files in ~/.memanto/sessions/
+        data_dir = get_data_dir()
+        sessions_dir = data_dir / "sessions"
+        if sessions_dir.exists():
+            # Delete main session file ({agent_id}.json)
+            session_file = sessions_dir / f"{agent_id}.json"
+            if session_file.exists():
+                session_file.unlink()
+
+            # Delete summary/state files matching the agent_id pattern
+            # (e.g. {agent_id}_{date}_{session_id}_summary.md)
+            for f in sessions_dir.glob(f"{agent_id}_*"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+            # Clear the active-session marker if it points to this agent
+            active_marker = sessions_dir / "active"
+            if active_marker.exists():
+                try:
+                    if active_marker.is_symlink():
+                        if active_marker.readlink().stem == agent_id:
+                            active_marker.unlink()
+                    else:
+                        content = active_marker.read_text().strip()
+                        if content == agent_id:
+                            active_marker.unlink()
+                except OSError:
+                    pass
+
+        # 3. Clean up conflict report files in ~/.memanto/conflicts/
+        conflicts_dir = data_dir / "conflicts"
+        if conflicts_dir.exists():
+            for f in conflicts_dir.glob(f"{agent_id}_*"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+        # 4. Optionally delete the Moorcheh namespace (best-effort)
+        if delete_namespace:
+            namespace = self._generate_namespace(agent_id)
+            try:
+                client = get_moorcheh_client()
+                client.namespaces.delete(namespace_name=namespace)
+            except Exception:
+                pass
 
     def agent_exists(self, agent_id: str) -> bool:
         """
