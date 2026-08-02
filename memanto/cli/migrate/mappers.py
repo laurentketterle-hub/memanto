@@ -502,3 +502,140 @@ def type_breakdown(rows: list[dict[str, Any]]) -> dict[str, int]:
         key = row.get("type") or "auto"
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+# --------------------------------------------------------------------------
+# Chat Export (ChatGPT, Claude, generic conversation exports)
+# --------------------------------------------------------------------------
+
+
+def map_chat(export: dict[str, Any]) -> list[dict[str, Any]]:
+    """Map a chat conversation export to Memanto memory payloads.
+
+    Accepts a generic chat export format compatible with ChatGPT exports
+    and similar conversation dumps:
+
+        {
+            "conversations": [
+                {
+                    "id": "conv_123",
+                    "title": "Planning trip to Paris",
+                    "created_at": "2026-01-15T10:00:00Z",
+                    "messages": [
+                        {"role": "user", "content": "I want to plan a trip...",
+                         "timestamp": "2026-01-15T10:00:01Z"},
+                        {"role": "assistant", "content": "Great! Let me help...",
+                         "timestamp": "2026-01-15T10:00:05Z"}
+                    ]
+                }
+            ]
+        }
+
+    Each conversation becomes a set of memories: the conversation metadata
+    as a summary, and each user message as a separate memory (user intent,
+    preference, or question). Assistant responses are preserved in the
+    supporting data footer for context.
+    """
+    rows: list[dict[str, Any]] = []
+    migrated_at = _now_utc()
+
+    for conv in export.get("conversations", []) or []:
+        conv_id = str(conv.get("id", ""))
+        conv_title = (conv.get("title") or "Untitled Conversation").strip()
+        messages = conv.get("messages", []) or []
+
+        if not messages:
+            continue
+
+        # Conversation summary memory
+        summary_content = f"Conversation: {conv_title}"
+        summary_tags = ["chat", "conversation"]
+        summary_created = _pick_first_dt(conv, ("created_at", "createdAt", "timestamp"))
+
+        conv_footer = _format_supporting_data([
+            ("Conversation ID", conv_id),
+            ("Message count", len(messages)),
+            ("Source", f"chat:{conv_id}" if conv_id else None),
+            ("Source created_at",
+             summary_created.isoformat() if summary_created else None),
+        ])
+
+        rows.append({
+            "title": _title_from(summary_content),
+            "content": _attach_footer(summary_content, conv_footer),
+            "type": "observation",
+            "tags": summary_tags,
+            "confidence": 0.85,
+            "source": "chat",
+            "source_ref": f"chat:{conv_id}:summary" if conv_id else None,
+            "provenance": "imported",
+            "created_at": summary_created,
+            "updated_at": migrated_at,
+        })
+
+        # Individual user messages as memories
+        for i, msg in enumerate(messages):
+            role = (msg.get("role") or "user").strip().lower()
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+
+            msg_created = _parse_dt(msg.get("timestamp"))
+            msg_tags = ["chat", f"role={role}"]
+            if conv_title:
+                msg_tags.append(f"conversation={conv_title[:60]}")
+
+            # Find next assistant response for context
+            assistant_response = ""
+            for j in range(i + 1, len(messages)):
+                if messages[j].get("role") == "assistant":
+                    assistant_response = (messages[j].get("content") or "")[:500]
+                    break
+
+            msg_footer_items: list[tuple[str, Any]] = [
+                ("Conversation", conv_title[:100] if conv_title else None),
+                ("Conversation ID", conv_id),
+                ("Role", role),
+                ("Message index", i + 1),
+                ("Total messages", len(messages)),
+                ("Source", f"chat:{conv_id}:msg:{i}" if conv_id else None),
+                ("Source timestamp",
+                 msg_created.isoformat() if msg_created else None),
+            ]
+            if assistant_response:
+                msg_footer_items.append(
+                    ("Assistant response (excerpt)", assistant_response)
+                )
+
+            msg_footer = _format_supporting_data(msg_footer_items)
+
+            # Determine memory type based on content
+            memory_type: str | None = None
+            content_lower = content.lower()
+            if any(w in content_lower for w in ["prefer", "like", "love", "hate",
+                                                  "favorite", "enjoy"]):
+                memory_type = "preference"
+            elif any(w in content_lower for w in ["remember", "note", "important",
+                                                    "don't forget"]):
+                memory_type = "fact"
+            elif any(w in content_lower for w in ["plan", "schedule", "todo",
+                                                    "need to", "going to"]):
+                memory_type = "commitment"
+
+            rows.append({
+                "title": _title_from(content),
+                "content": _attach_footer(content, msg_footer),
+                "type": memory_type,
+                "tags": msg_tags,
+                "confidence": 0.75,
+                "source": "chat",
+                "source_ref": f"chat:{conv_id}:msg:{i}" if conv_id else None,
+                "provenance": "imported",
+                "created_at": msg_created,
+                "updated_at": migrated_at,
+            })
+
+    return rows
+
+
+MAPPERS["chat"] = map_chat

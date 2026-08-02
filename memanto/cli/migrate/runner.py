@@ -89,6 +89,12 @@ def source_count(provider: str, export: dict[str, Any]) -> int:
     """Best-effort count of source records (for the summary header)."""
     if provider == "letta":
         return len(export.get("passages", []) or [])
+    if provider == "chat":
+        conversations = export.get("conversations", []) or []
+        return sum(
+            len(conv.get("messages", []) or []) + 1
+            for conv in conversations
+        )
     memories = export.get("memories", []) or []
     if provider == "supermemory" and not memories:
         # Mirror map_supermemory's fallback: when no extracted memories exist

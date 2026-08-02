@@ -1,0 +1,58 @@
+{
+  "conversations": [
+    {
+      "id": "conv_trip_paris",
+      "title": "Planning a Trip to Paris",
+      "created_at": "2026-01-15T10:00:00Z",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I want to plan a trip to Paris in March. I prefer boutique hotels over big chains.",
+          "timestamp": "2026-01-15T10:00:01Z"
+        },
+        {
+          "role": "assistant",
+          "content": "Great choice! March is a wonderful time to visit Paris. For boutique hotels, I'd recommend Le Marais or Saint-Germain-des-Prés neighborhoods.",
+          "timestamp": "2026-01-15T10:00:05Z"
+        },
+        {
+          "role": "user",
+          "content": "I love French cuisine, especially croissants and cheese. Remember I'm lactose intolerant though.",
+          "timestamp": "2026-01-15T10:01:00Z"
+        },
+        {
+          "role": "assistant",
+          "content": "Noted! I'll keep your lactose intolerance in mind when recommending restaurants. Many Parisian restaurants now offer dairy-free options.",
+          "timestamp": "2026-01-15T10:01:05Z"
+        },
+        {
+          "role": "user",
+          "content": "My budget is around $3000 for the whole trip including flights.",
+          "timestamp": "2026-01-15T10:02:00Z"
+        }
+      ]
+    },
+    {
+      "id": "conv_work_project",
+      "title": "Q3 Project Planning",
+      "created_at": "2026-02-20T14:00:00Z",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I need to finish the API migration by end of Q3. The deadline is September 30.",
+          "timestamp": "2026-02-20T14:00:01Z"
+        },
+        {
+          "role": "assistant",
+          "content": "Let's break this down into milestones. How many endpoints need migration?",
+          "timestamp": "2026-02-20T14:00:05Z"
+        },
+        {
+          "role": "user",
+          "content": "About 45 endpoints. I want to prioritize the payment and auth services first.",
+          "timestamp": "2026-02-20T14:01:00Z"
+        }
+      ]
+    }
+  ]
+}
