@@ -659,3 +659,125 @@ def migrate_supermemory(
         dry_run=dry_run,
         report=report,
     )
+
+
+@migrate_app.command("claude")
+def migrate_claude(
+    file: Path = typer.Option(
+        ...,
+        "--file",
+        "-f",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the Claude export JSON file (downloaded from claude.ai/settings/export).",
+    ),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        "-a",
+        help="Target Memanto agent id (defaults to the active agent).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview the mapping without writing.",
+    ),
+):
+    """Import a Claude conversation export into the active (or selected) agent.
+
+    Claude is a file-based adapter — point it at the JSON export file
+    from Anthropic (Settings > Export Data). Each conversation becomes a set
+    of memories: a conversation overview plus per-message memories.
+    Assistant responses are preserved in the supporting-data footer.
+
+    Examples:
+        memanto migrate claude --file ./conversations.json --dry-run
+        memanto migrate claude --file ./claude_export.json --agent my-agent
+    """
+    if not file or not file.exists():
+        _error(
+            f"Claude export file not found",
+            hint="Provide --file pointing to the JSON export from claude.ai.",
+        )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_dir = config_manager.get_migrate_dir("claude") / stamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    mode = "Dry run" if dry_run else "Migrate"
+    console.print(
+        Panel.fit(
+            f"[{BOLD_PRIMARY}]Claude -> Memanto  {mode}[/{BOLD_PRIMARY}]",
+            border_style=PRIMARY,
+        )
+    )
+
+    def progress(msg: str) -> None:
+        console.print(f"  [{BRIGHT}]...[/{BRIGHT}] {msg}")
+
+    target_agent = None if dry_run else _resolve_target_agent(agent)
+
+    progress(f"Loading Claude export from {file}")
+    try:
+        export = load_export(file)
+    except Exception as exc:
+        _error(f"Failed to load Claude export: {exc}")
+
+    progress("Mapping Claude conversations onto Memanto schema...")
+    client = None if dry_run else get_client()
+    summary, rows = run_migration(
+        provider="claude",
+        export=export,
+        client=client,
+        agent_id=target_agent or "",
+        dry_run=dry_run,
+        on_progress=progress,
+    )
+
+    preview_path = write_preview(rows, run_dir / "mapped_preview.json")
+
+    type_lines = (
+        ", ".join(f"{k}: {v}" for k, v in sorted(summary.type_counts.items())) or "-"
+    )
+    body_lines = [
+        f"[dim]Source records:[/dim] {summary.source_count}",
+        f"[dim]Source messages:[/dim] {summary.source_count}",
+        f"[dim]Mapped memories:[/dim] {summary.mapped_count}  "
+        f"[dim](skipped {summary.skipped})[/dim]",
+        f"[dim]Type breakdown:[/dim] {type_lines}",
+    ]
+    if dry_run:
+        body_lines.append("")
+        body_lines.append("[yellow]Dry run - no writes performed.[/yellow]")
+    else:
+        body_lines.append(
+            f"[dim]Imported:[/dim] {summary.imported}  "
+            f"[dim]Failed:[/dim] {summary.failed}  "
+            f"[dim]Batches:[/dim] {summary.batches}"
+        )
+        body_lines.append(f"[dim]Target agent:[/dim] {target_agent}")
+
+    body_lines.append("")
+    body_lines.append(f"[dim]Run dir:[/dim] {run_dir}")
+    body_lines.append(f"[dim]Mapped preview:[/dim] {preview_path}")
+    if summary.errors:
+        body_lines.append(
+            f"[red]First error:[/red] {summary.errors[0]}  "
+            "[dim](see run dir for more)[/dim]"
+        )
+
+    border = WARNING if summary.failed else SUCCESS
+    console.print()
+    console.print(
+        Panel(
+            "\n".join(body_lines),
+            title=(
+                "[bold yellow]Dry run complete[/bold yellow]"
+                if dry_run
+                else "[bold green]Import complete[/bold green]"
+            ),
+            border_style=border,
+        )
+    )

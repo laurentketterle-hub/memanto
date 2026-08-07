@@ -487,11 +487,159 @@ def map_okf(export: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+# --------------------------------------------------------------------------
+# Claude Export (Anthropic Claude conversation exports)
+# --------------------------------------------------------------------------
+
+
+def _collect_attachment_info(messages):
+    seen = set()
+    result = []
+    for msg in (messages or []):
+        if not isinstance(msg, dict):
+            continue
+        for coll in ("attachments", "files"):
+            for item in (msg.get(coll) or []):
+                if not isinstance(item, dict):
+                    continue
+                fname = item.get("file_name") or item.get("name")
+                if fname and str(fname) not in seen:
+                    seen.add(str(fname))
+                    result.append(str(fname))
+    return result
+
+
+def map_claude(export):
+    rows = []
+    migrated_at = _now_utc()
+    conversations = []
+    if isinstance(export, list):
+        conversations = [c for c in export if isinstance(c, dict)]
+    elif isinstance(export, dict):
+        raw_convs = export.get("conversations")
+        if isinstance(raw_convs, list):
+            conversations = raw_convs
+        elif "chat_messages" in export and "uuid" in export:
+            conversations = [export]
+    for conv in conversations:
+        conv_uuid = str(conv.get("uuid", ""))
+        conv_name = (conv.get("name") or "Untitled Conversation").strip()
+        conv_summary = (conv.get("summary") or "").strip()
+        messages = conv.get("chat_messages") or []
+        if isinstance(messages, dict):
+            messages = messages.get("messages", [])
+        if not isinstance(messages, list) or not messages:
+            continue
+        conv_created = _pick_first_dt(conv, ("created_at", "createdAt"))
+        conv_tags = ["claude", "conversation"]
+        if conv_name and len(conv_name) <= 60:
+            conv_tags.append("conversation=" + conv_name[:60])
+        overview_text = "Claude conversation: " + conv_name
+        if conv_summary:
+            overview_text += "\nSummary: " + conv_summary
+        att_files = _collect_attachment_info(messages)
+        if att_files:
+            conv_tags.append("has-attachments")
+        conv_footer = _format_supporting_data([
+            ("Claude conversation UUID", conv_uuid),
+            ("Message count", len(messages)),
+            ("Source", "claude:" + conv_uuid if conv_uuid else None),
+            ("Source created_at", conv_created.isoformat() if conv_created else None),
+            ("Files referenced", att_files if att_files else None),
+            ("Conversation summary", conv_summary if conv_summary else None),
+        ])
+        rows.append({
+            "title": _title_from(overview_text),
+            "content": _attach_footer(overview_text, conv_footer),
+            "type": "observation",
+            "tags": conv_tags,
+            "confidence": 0.85,
+            "source": "claude",
+            "source_ref": "claude:" + conv_uuid + ":overview" if conv_uuid else None,
+            "provenance": "imported",
+            "created_at": conv_created,
+            "updated_at": migrated_at,
+        })
+        for i, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                continue
+            sender = (msg.get("sender") or "human").strip().lower()
+            # Only create memories for human/user messages; assistant
+            # responses are preserved in the supporting-data footer.
+            if sender not in ("human", "user"):
+                continue
+            text = (msg.get("text") or "").strip()
+            if not text:
+                continue
+            msg_created = _parse_dt(msg.get("created_at"))
+            msg_tags = ["claude", "sender=" + sender]
+            if conv_name and len(conv_name) <= 60:
+                msg_tags.append("conversation=" + conv_name[:60])
+            msg_files = []
+            for coll in ("attachments", "files"):
+                for item in (msg.get(coll) or []):
+                    if not isinstance(item, dict):
+                        continue
+                    fname = item.get("file_name") or item.get("name")
+                    if fname:
+                        msg_files.append(str(fname))
+            for fname in msg_files:
+                msg_tags.append("file=" + fname[:40])
+            assistant_response = ""
+            for j in range(i + 1, len(messages)):
+                nxt = messages[j]
+                if not isinstance(nxt, dict):
+                    continue
+                if nxt.get("sender") == "assistant":
+                    assistant_response = (nxt.get("text") or "")[:500]
+                    break
+            msg_footer_items = [
+                ("Conversation", conv_name[:100] if conv_name else None),
+                ("Claude conversation UUID", conv_uuid),
+                ("Sender", sender),
+                ("Message index", i + 1),
+                ("Source", "claude:" + conv_uuid + ":msg:" + str(i) if conv_uuid else None),
+                ("Source timestamp", msg_created.isoformat() if msg_created else None),
+            ]
+            if msg_files:
+                msg_footer_items.append(("Attached files", msg_files))
+            if assistant_response:
+                msg_footer_items.append(("Assistant response (excerpt)", assistant_response))
+            msg_footer = _format_supporting_data(msg_footer_items)
+            memory_type = None
+            cl = text.lower()
+            if any(w in cl for w in ["prefer", "like", "love", "hate", "favorite", "enjoy"]):
+                memory_type = "preference"
+            elif any(w in cl for w in ["remember", "note", "important", "fyi"]):
+                memory_type = "fact"
+            elif any(w in cl for w in ["plan", "schedule", "todo", "need to", "going to", "will do", "commit"]):
+                memory_type = "commitment"
+            elif any(w in cl for w in ["decide", "choice", "picked", "chose", "decision"]):
+                memory_type = "decision"
+            elif any(w in cl for w in ["goal", "aim", "objective", "target", "aspiration"]):
+                memory_type = "goal"
+            rows.append({
+                "title": _title_from(text),
+                "content": _attach_footer(text, msg_footer),
+                "type": memory_type,
+                "tags": msg_tags,
+                "confidence": 0.75,
+                "source": "claude",
+                "source_ref": "claude:" + conv_uuid + ":msg:" + str(i) if conv_uuid else None,
+                "provenance": "imported",
+                "created_at": msg_created,
+                "updated_at": migrated_at,
+            })
+    return rows
+
+
+
 MAPPERS: dict[str, Callable[[dict[str, Any]], list[dict[str, Any]]]] = {
     "mem0": map_mem0,
     "letta": map_letta,
     "supermemory": map_supermemory,
     "okf": map_okf,
+    "claude": map_claude,
 }
 
 
