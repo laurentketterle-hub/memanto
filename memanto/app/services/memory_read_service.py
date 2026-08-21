@@ -847,15 +847,15 @@ class MemoryReadService:
     ) -> dict[str, Any]:
         """Generate AI answer from memories"""
         try:
-            # Determine namespace for answer generation
-            if agent_id:
-                namespace = agent_namespace(agent_id)
-            else:
-                # Use first available namespace
-                namespaces = self.namespace_service.list_namespaces()
-                if not namespaces:
-                    raise MemoryOperationError("No namespaces found")
-                namespace = namespaces[0]
+            # Tenant isolation: answer generation must be scoped to one agent's
+            # namespace. The previous "first available namespace" fallback let a
+            # caller without an ``agent_id`` read memories from whichever tenant
+            # happened to sort first in the account's namespace list.
+            if not agent_id:
+                raise MemoryError(
+                    "Tenant isolation: an agent_id is required to scope an answer"
+                )
+            namespace = agent_namespace(agent_id)
 
             # Generate answer. Omit ai_model when on-prem state has no LLM
             # configured so the on-prem server uses its own default; the
@@ -876,15 +876,19 @@ class MemoryReadService:
             raise MemoryOperationError(f"Failed to generate answer: {e}")
 
     def _get_search_namespaces(self, agent_id: str | None = None) -> list[str]:
-        """Get namespaces to search based on filters"""
-        from typing import cast
+        """Return the single tenant namespace for *agent_id*.
 
-        if agent_id:
-            # Search a specific agent's namespace
-            return [agent_namespace(agent_id)]
-        else:
-            # Search all namespaces
-            return cast(list[str], self.namespace_service.list_namespaces())
+        Tenant isolation: a memory read must be scoped to one agent's namespace.
+        Fanning out across every namespace on the server account (the previous
+        ``list_namespaces()`` fallback) let a caller with a missing or empty
+        ``agent_id`` read every other tenant's memories. Fail closed instead.
+        """
+        if not agent_id:
+            raise MemoryError(
+                "Tenant isolation: an agent_id is required to scope a memory read"
+            )
+        # Search a specific agent's namespace
+        return [agent_namespace(agent_id)]
 
     def _filter_search_results(
         self,
