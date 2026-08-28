@@ -2,6 +2,7 @@
 Memory Read Service
 """
 
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -810,6 +811,11 @@ class MemoryReadService:
                 # Fail open: include memories with unknown confidence rather
                 # than silently dropping them. This preserves imported memories
                 # that may not carry a confidence score.
+                filtered.append(result)
+                continue
+            if not math.isfinite(confidence):
+                # Non-finite values (NaN/inf) are malformed: fail open, same as
+                # unparseable confidence above, rather than silently dropping.
                 filtered.append(result)
                 continue
             if confidence >= min_confidence:
